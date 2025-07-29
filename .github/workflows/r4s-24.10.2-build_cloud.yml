@@ -64,6 +64,11 @@ jobs:
           zgrep -m 1 "Depends: kernel (=.*)$" Packages.gz | sed -e 's/.*-\(.*\))/\1/' > .vermagic
           cat .vermagic
           sed -i -e 's/^\(.\).*vermagic$/\1cp $(TOPDIR)\/.vermagic $(LINUX_DIR)\/.vermagic/' include/kernel-defaults.mk
+          
+      - name: update and install feeds
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
 
       - name: copy .config file and files directory
         run: |
