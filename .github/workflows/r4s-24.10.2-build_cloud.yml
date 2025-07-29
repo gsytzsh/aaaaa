@@ -1,0 +1,106 @@
+name: r4s_v24.10.2_cloud
+
+on:
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: op_source
+
+env:
+  BUILD_VERSION: 24.10.2
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    if: github.event.repository.owner.id == github.event.sender.id
+
+    steps:
+      - name: checkout config
+        uses: actions/checkout@master
+        with:
+          path: op_config
+
+      - name: checkout openwrt
+        env:
+          GIT_TERMINAL_PROMPT: 1
+        uses: actions/checkout@master
+        with:
+          repository: openwrt/openwrt
+          ref: v${{env.BUILD_VERSION}}
+          path: op_source
+
+      - name: prepare os environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          df -h
+          sudo -E apt-get update
+          sudo -E apt-get -y install build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev python3-pyelftools python3-distutils rsync unzip zlib1g-dev file wget
+          sudo -E apt-get -y autoremove --purge
+          sudo -E apt-get clean
+          df -h
+          sudo -E apt-get remove -y '^dotnet-.*'
+          sudo -E apt-get remove -y '^llvm-.*'
+          sudo -E apt-get remove -y '^php.*'
+          sudo -E apt-get -y purge azure-cli* docker* ghc* zulu* hhvm* llvm* firefox* google* dotnet* aspnetcore* powershell* openjdk* adoptopenjdk* mysql* php* mongodb* moby* snap* || true
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          sudo rm -rf /usr/share/dotnet 2>&1 >/dev/null
+          df -h
+
+      - name: free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
+      - name: modify magic version
+        run: |
+          curl -O https://downloads.openwrt.org/releases/${{env.BUILD_VERSION}}/targets/rockchip/armv8/packages/Packages.gz
+          zgrep -m 1 "Depends: kernel (=.*)$" Packages.gz | sed -e 's/.*-\(.*\))/\1/' > .vermagic
+          cat .vermagic
+          sed -i -e 's/^\(.\).*vermagic$/\1cp $(TOPDIR)\/.vermagic $(LINUX_DIR)\/.vermagic/' include/kernel-defaults.mk
+
+      - name: copy .config file and files directory
+        run: |
+          cd ..
+          cat op_config/config/.config > op_source/.config
+
+      - name: make defconfig
+        run: |
+          make defconfig
+          sed -i 's/dnsmasq=y/dnsmasq=n/g' .config
+
+      - name: make download
+        run: |
+          make download -j$(($(nproc)+1)) 2>&1 | tee download.log
+
+      - name: make
+        run: |
+          make -j$(($(nproc)+1)) 2>&1 | tee make.log
+
+      - name: mkdir for artifact
+        run: |
+          tree ./bin && echo ""
+          find ./bin/targets -type f -name "*.img.*" -print
+          find ./bin/targets -type f -name "*.bin.*" -print
+          find ./bin/targets -type f -name "*.buildinfo" -print
+          find ./bin/targets -type f -name "sha256sums" -print
+          mkdir ./artifact
+          find ./bin/targets -type f -name "*.img.*" | xargs -i mv {} ./artifact
+          find ./bin/targets -type f -name "*.bin.*" | xargs -i mv {} ./artifact
+          find ./bin/targets -type f -name "*.buildinfo" | xargs -i mv {} ./artifact
+          find ./bin/targets -type f -name "sha256sums" | xargs -i mv {} ./artifact
+
+      - name: upload artifact
+        uses: actions/upload-artifact@master
+        with:
+          name: openwrt_artifact
+          path: |
+            ./op_source/artifact/
+            ./op_source/.config
+            ./op_source/*.log
